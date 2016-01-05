@@ -16,6 +16,6 @@ return
     ImageMinSide = 256, --Minimum side length of saved images
     Normalization = {'simple', 118.380948, 61.896913}, --Default normalization -global mean, std
     Compressed = true,
-    PreTrainedCNN = '../GoogLeNet/GoogLeNet_v2.t7',
+    PreTrainedCNN = '../GoogLeNet.torch/GoogLeNet_v2.t7',
     Key = Key
 }

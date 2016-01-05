@@ -10,7 +10,7 @@ require 'eladtools'
 cmd = torch.CmdLine()
 cmd:addTime()
 cmd:text()
-cmd:text('Training recurrent networks on character-level text dataset')
+cmd:text('Training recurrent networks to create captions from images')
 cmd:text()
 cmd:text('==>Options')
 
@@ -19,14 +19,14 @@ cmd:option('-shuffle',            false,                       'shuffle training
 
 cmd:text('===>Model And Training Regime')
 cmd:option('-modelsFolder',       '../recurrentModels/',       'Models Folder')
-cmd:option('-model',              'GRU',                      'Model file - must return a model bulider function')
+cmd:option('-model',              'GRU',                       'Model file - must return a model bulider function')
 cmd:option('-seqLength',          10,                          'number of timesteps to unroll for')
 cmd:option('-embeddingSize',      128,                          'size of word embedding')
 cmd:option('-rnnSize',            128,                         'size of rnn hidden layer')
 cmd:option('-numLayers',          2,                           'number of layers in the LSTM')
-cmd:option('-dropout',            0.5,                           'dropout p value')
+cmd:option('-dropout',            0.5,                         'dropout p value')
 cmd:option('-LR',                 1e-3,                        'learning rate')
-cmd:option('-LRDecay',            0,                         'learning rate decay (in # samples)')
+cmd:option('-LRDecay',            0,                           'learning rate decay (in # samples)')
 cmd:option('-weightDecay',        0,                           'L2 penalty on the weights')
 cmd:option('-momentum',           0.9,                         'momentum')
 cmd:option('-batchSize',          32,                          'batch size')
@@ -55,7 +55,6 @@ cmd:option('-checkpoint',         0,                           'Save a weight ch
 
 
 opt = cmd:parse(arg or {})
-opt.model = opt.modelsFolder .. paths.basename(opt.model, '.lua')
 opt.save = paths.concat('./Results', opt.save)
 torch.setnumthreads(opt.threads)
 torch.manualSeed(opt.seed)
@@ -91,12 +90,13 @@ if paths.filep(opt.load) then
     modelConfig = torch.load(opt.load)
     print('==>Loaded Net from: ' .. opt.load)
 else
-    modelConfig.recurrent = nn.GRU(opt.embeddingSize, opt.rnnSize)
+    local rnnTypes = {LSTM = nn.LSTM, RNN = nn.RNN, GRU = nn.GRU, iRNN = nn.iRNN}
+    local rnn = rnnTypes[opt.model]
+    modelConfig.recurrent = rnn(opt.embeddingSize, opt.rnnSize)
 end
 
 local trainRegime = modelConfig.regime
 local recurrent = modelConfig.recurrent
-local stateSize = modelConfig.stateSize
 
 cudnn.benchmark = true
 
@@ -107,11 +107,11 @@ imageEmbedder:add(cudnn.SpatialConvolution(1024, 512, 3,3))
 imageEmbedder:add(cudnn.SpatialMaxPooling(3,3,2,2))
 imageEmbedder:add(cudnn.ReLU())
 imageEmbedder:add(cudnn.SpatialBatchNormalization(512))
+imageEmbedder:add(nn.Dropout(opt.dropout))
 imageEmbedder:add(nn.View(512*2*2):setNumInputDims(3))
 imageEmbedder:add(nn.Linear(512*2*2, opt.embeddingSize))
 imageEmbedder:add(nn.BatchNormalization(opt.embeddingSize))
 imageEmbedder:add(nn.View(1, opt.embeddingSize):setNumInputDims(1))
-imageEmbedder:add(nn.Dropout(opt.dropout))
 
 local embedder = nn.Sequential():add(nn.ParallelTable():add(imageEmbedder):add(textEmbedder)):add(nn.JoinTable(1,2))
 local classifier = nn.Linear(opt.rnnSize, vocabSize)
@@ -120,9 +120,9 @@ local loss = nn.TemporalCriterion(nn.CrossEntropyCriterion())
 local cnnModel = torch.load(config.PreTrainedCNN)
 local removeAfter = 26
 for i=30, removeAfter ,-1 do
-  cnnModel:remove(i)
+    cnnModel:remove(i)
 end
-local model = nn.Sequential():add(embedder):add(recurrent):add(nn.TemporalModule(classifier))
+local model = nn.Sequential():add(embedder):add(recurrent):add(nn.Dropout(opt.dropout)):add(nn.TemporalModule(classifier))
 
 
 local TensorType = 'torch.FloatTensor'
@@ -165,7 +165,7 @@ local savedModel = {
     textEmbedder = textEmbedder:clone('weight','bias', 'running_mean', 'running_std'),
     imageEmbedder = imageEmbedder:clone('weight','bias', 'running_mean', 'running_std'),
     classifier = classifier:clone('weight','bias', 'running_mean', 'running_std'),
-    recurrent = recurrent:clone('weight','bias', 'running_mean', 'running_std','state')
+    recurrent = recurrent:clone('weight','bias', 'running_mean', 'running_std')
 }
 
 
@@ -288,7 +288,7 @@ local function Forward(DB, train)
             else
                 y = model:forward(x)
                 currLoss = loss:forward(y,yt)
-           end
+            end
             lossVal = currLoss / opt.seqLength + lossVal
             NumSamples = NumSamples + opt.batchSize
             xlua.progress(NumSamples, SizeData)
@@ -304,11 +304,13 @@ end
 
 local function Train(data)
     model:training()
+    embedder:training()
     return Forward(data, true)
 end
 
 local function Evaluate(data)
     model:evaluate()
+    embedder:evaluate()
     return Forward(data,  false)
 end
 
