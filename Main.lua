@@ -65,7 +65,6 @@ local AllowVarBatch = not opt.constBatchSize
 ----------------------------------------------------------------------
 -- Output files configuration
 os.execute('mkdir -p ' .. opt.save)
-os.execute('cp ' .. opt.model .. '.lua ' .. opt.save)
 
 cmd:log(opt.save .. '/Log.txt', opt)
 local netFilename = paths.concat(opt.save, 'Net')
@@ -77,7 +76,7 @@ local Log = optim.Logger(logFilename)
 local data = require 'Data'
 local config = require 'Config'
 local normalization = config.Normalization
-config.InputSize = {3,224,224}
+
 config.SentenceLength = opt.seqLength
 local vocabSize = 0
 for _ in pairs(config.Vocab) do vocabSize = vocabSize + 1 end
@@ -103,14 +102,18 @@ cudnn.benchmark = true
 local textEmbedder = nn.Sequential()
 textEmbedder:add(nn.LookupTable(vocabSize, opt.embeddingSize))
 local imageEmbedder = nn.Sequential()
-imageEmbedder:add(cudnn.SpatialConvolution(1024, 512, 3,3))
-imageEmbedder:add(cudnn.SpatialMaxPooling(3,3,2,2))
+--imageEmbedder:add(cudnn.SpatialConvolution(1024, 512, 3,3))
+--imageEmbedder:add(cudnn.SpatialMaxPooling(3,3,2,2))
+--imageEmbedder:add(cudnn.ReLU())
+--imageEmbedder:add(cudnn.SpatialBatchNormalization(512))
+--imageEmbedder:add(nn.Dropout(opt.dropout))
+--imageEmbedder:add(nn.View(512*2*2):setNumInputDims(3))
+--imageEmbedder:add(nn.Linear(512*2*2, opt.embeddingSize))
+--imageEmbedder:add(nn.BatchNormalization(opt.embeddingSize))
+imageEmbedder:add(nn.Mean(3))
+imageEmbedder:add(nn.Mean(3))
+imageEmbedder:add(nn.Linear(config.NumFeatsCNN, opt.embeddingSize))
 imageEmbedder:add(cudnn.ReLU())
-imageEmbedder:add(cudnn.SpatialBatchNormalization(512))
-imageEmbedder:add(nn.Dropout(opt.dropout))
-imageEmbedder:add(nn.View(512*2*2):setNumInputDims(3))
-imageEmbedder:add(nn.Linear(512*2*2, opt.embeddingSize))
-imageEmbedder:add(nn.BatchNormalization(opt.embeddingSize))
 imageEmbedder:add(nn.View(1, opt.embeddingSize):setNumInputDims(1))
 
 local embedder = nn.Sequential():add(nn.ParallelTable():add(imageEmbedder):add(textEmbedder)):add(nn.JoinTable(1,2))
@@ -118,8 +121,9 @@ local classifier = nn.Linear(opt.rnnSize, vocabSize)
 local loss = nn.TemporalCriterion(nn.CrossEntropyCriterion())
 
 local cnnModel = torch.load(config.PreTrainedCNN)
-local removeAfter = 26
-for i=30, removeAfter ,-1 do
+
+local removeAfter = config.FeatLayerCNN
+for i = #cnnModel, removeAfter ,-1 do
     cnnModel:remove(i)
 end
 local model = nn.Sequential():add(embedder):add(recurrent):add(nn.Dropout(opt.dropout)):add(nn.TemporalModule(classifier))

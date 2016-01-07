@@ -18,12 +18,12 @@ imgs, captions = data.ValDB:cacheSeq(Key(200),numImages, imgs)
 imgs = imgs:cuda()
 imgs:add(-config.Normalization[2]):div(config.Normalization[3])
 local cnnModel = torch.load(config.PreTrainedCNN):cuda()
-local removeAfter = 26
-for i=30, removeAfter ,-1 do
-  cnnModel:remove(i)
+local removeAfter = config.FeatLayerCNN
+for i = #cnnModel, removeAfter ,-1 do
+    cnnModel:remove(i)
 end
 local imgNum = 1
-local modelConfig = torch.load('./Results/captionGRU_512/Net_7.t7')
+local modelConfig = torch.load('./Results/captionInceptionv3/Net_20.t7')
 local textEmbedder = modelConfig.textEmbedder:cuda()
 local imageEmbedder = modelConfig.imageEmbedder:cuda()
 local classifier = modelConfig.classifier:cuda()
@@ -38,16 +38,19 @@ imageEmbedder:evaluate()
 textEmbedder:evaluate()
 cnnModel:evaluate()
 local temperature = 0--temperature or 1
-local function smpWord(preds)
+local function beamSearch(model, firstToken, numDraw, numKeep, temp)
+  local temperature = temp or 1
+  local numKeep = numKeep or 20
+  local numDraw = numDraw or 5
+  local preds = model:forward(firstToken)
 
-  if temperature == 0 then
-    local _, num = preds:max(2)
-    return num
-  else
-    preds:div(temperature) -- scale by temperature
-    local probs = torch.exp(preds):squeeze()
-    probs:div(probs:sum()) -- renormalize so probs sum to one
-    local num = torch.multinomial(probs:float(), 1):view(1,-1)
+  preds:div(temperature) -- scale by temperature
+  local probs = torch.exp(preds)
+  probs:cdiv(probs:sum(1):expandAs(probs)) -- renormalize so probs sum to one
+
+  local draws, drawsIdx = probs:sort(2)
+  draws:cmul(currProbs:expandAs(draws))
+  for i = 1, draws:size() do
     return num
   end
 end
