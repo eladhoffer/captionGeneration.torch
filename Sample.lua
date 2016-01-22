@@ -5,25 +5,46 @@ require 'image'
 require 'trepl'
 require 'recurrent'
 
-cutorch.setDevice(2)
+cmd = torch.CmdLine()
+cmd:addTime()
+cmd:text()
+cmd:text('Training recurrent networks to create captions from images')
+cmd:text()
+cmd:text('==>Options')
+
+cmd:text('===>Data Options')
+cmd:option('-shuffle',            false,                       'shuffle training samples')
+
+cmd:text('===>Model And Training Regime')
+cmd:option('-model',              'GRU',                       'Model file - must return a model bulider function')
+cmd:option('-seqLength',          10,                          'number of timesteps to unroll for')
+
+cmd:option('-load',               '',                          'load existing net weights')
+cmd:option('-save',               os.date():gsub(' ',''),      'save directory')
+cmd:option('-optState',           false,                       'Save optimization state every epoch')
+cmd:option('-checkpoint',         0,                           'Save a weight check point every n samples. 0 for off')
+
+
+cutorch.setDevice(opt.devid)
+
 local config = require 'Config'
 config.InputSize = {3,224,224}
-config.SentenceLength = 10
+config.SentenceLength = opt.seqLength
 local numImages = 20
 local numWords = 15
 local data =require 'Data'
 local imgs = torch.ByteTensor(numImages, unpack(config.InputSize))
 local captions
-imgs, captions = data.ValDB:cacheSeq(Key(200),numImages, imgs)
+imgs, captions = data.ValDB:cacheSeq(Key(500),numImages, imgs)
 imgs = imgs:cuda()
 imgs:add(-config.Normalization[2]):div(config.Normalization[3])
 local cnnModel = torch.load(config.PreTrainedCNN):cuda()
 local removeAfter = config.FeatLayerCNN
 for i = #cnnModel, removeAfter ,-1 do
-    cnnModel:remove(i)
+  cnnModel:remove(i)
 end
 local imgNum = 1
-local modelConfig = torch.load('./Results/captionInceptionv3/Net_20.t7')
+local modelConfig = torch.load('./Results/captionInceptionv3/Net_40.t7')
 local textEmbedder = modelConfig.textEmbedder:cuda()
 local imageEmbedder = modelConfig.imageEmbedder:cuda()
 local classifier = modelConfig.classifier:cuda()

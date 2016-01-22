@@ -18,10 +18,9 @@ cmd:text('===>Data Options')
 cmd:option('-shuffle',            false,                       'shuffle training samples')
 
 cmd:text('===>Model And Training Regime')
-cmd:option('-modelsFolder',       '../recurrentModels/',       'Models Folder')
 cmd:option('-model',              'GRU',                       'Model file - must return a model bulider function')
 cmd:option('-seqLength',          10,                          'number of timesteps to unroll for')
-cmd:option('-embeddingSize',      128,                          'size of word embedding')
+cmd:option('-embeddingSize',      128,                         'size of word embedding')
 cmd:option('-rnnSize',            128,                         'size of rnn hidden layer')
 cmd:option('-numLayers',          2,                           'number of layers in the LSTM')
 cmd:option('-dropout',            0.5,                         'dropout p value')
@@ -97,23 +96,13 @@ end
 local trainRegime = modelConfig.regime
 local recurrent = modelConfig.recurrent
 
-cudnn.benchmark = true
-
 local textEmbedder = nn.Sequential()
 textEmbedder:add(nn.LookupTable(vocabSize, opt.embeddingSize))
 local imageEmbedder = nn.Sequential()
---imageEmbedder:add(cudnn.SpatialConvolution(1024, 512, 3,3))
---imageEmbedder:add(cudnn.SpatialMaxPooling(3,3,2,2))
---imageEmbedder:add(cudnn.ReLU())
---imageEmbedder:add(cudnn.SpatialBatchNormalization(512))
---imageEmbedder:add(nn.Dropout(opt.dropout))
---imageEmbedder:add(nn.View(512*2*2):setNumInputDims(3))
---imageEmbedder:add(nn.Linear(512*2*2, opt.embeddingSize))
---imageEmbedder:add(nn.BatchNormalization(opt.embeddingSize))
 imageEmbedder:add(nn.Mean(3))
 imageEmbedder:add(nn.Mean(3))
 imageEmbedder:add(nn.Linear(config.NumFeatsCNN, opt.embeddingSize))
-imageEmbedder:add(cudnn.ReLU())
+imageEmbedder:add(nn.ReLU())
 imageEmbedder:add(nn.View(1, opt.embeddingSize):setNumInputDims(1))
 
 local embedder = nn.Sequential():add(nn.ParallelTable():add(imageEmbedder):add(textEmbedder)):add(nn.JoinTable(1,2))
@@ -121,11 +110,12 @@ local classifier = nn.Linear(opt.rnnSize, vocabSize)
 local loss = nn.TemporalCriterion(nn.CrossEntropyCriterion())
 
 local cnnModel = torch.load(config.PreTrainedCNN)
-
 local removeAfter = config.FeatLayerCNN
 for i = #cnnModel, removeAfter ,-1 do
     cnnModel:remove(i)
 end
+print(cnnModel)
+
 local model = nn.Sequential():add(embedder):add(recurrent):add(nn.Dropout(opt.dropout)):add(nn.TemporalModule(classifier))
 
 
@@ -160,8 +150,6 @@ if opt.type =='cuda' then
 end
 
 
-
-
 -- Optimization configuration
 local Weights,Gradients = model:getParameters()
 
@@ -172,8 +160,6 @@ local savedModel = {
     recurrent = recurrent:clone('weight','bias', 'running_mean', 'running_std')
 }
 
-
-
 ----------------------------------------------------------------------
 print '\n==> Network'
 print(model)
@@ -182,10 +168,6 @@ print('\n==>' .. Weights:nElement() ..  ' Parameters')
 print '\n==> Loss'
 print(loss)
 
-if trainRegime then
-    print '\n==> Training Regime'
-    table.foreach(trainRegime, function(x, val) print(string.format('%012s',x), unpack(val)) end)
-end
 ------------------Optimization Configuration--------------------------
 
 local optimState = {
