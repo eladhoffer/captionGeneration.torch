@@ -88,24 +88,24 @@ if paths.filep(opt.load) then
     modelConfig = torch.load(opt.load)
     print('==>Loaded Net from: ' .. opt.load)
 else
-    local rnnTypes = {LSTM = nn.LSTM, RNN = nn.RNN, GRU = nn.GRU, iRNN = nn.iRNN}
+    local rnnTypes = {LSTM = nn.AttentiveLSTM, GRU = nn.AttentiveGRU}
     local rnn = rnnTypes[opt.model]
-    modelConfig.recurrent = rnn(opt.embeddingSize, opt.rnnSize)
+    modelConfig.recurrent = rnn(opt.embeddingSize, opt.rnnSize, opt.embeddingSize, 7*7)
 end
 
 local trainRegime = modelConfig.regime
 local recurrent = modelConfig.recurrent
 
 local textEmbedder = nn.Sequential()
-textEmbedder:add(nn.LookupTable(vocabSize, opt.embeddingSize))
-local imageEmbedder = nn.Sequential()
-imageEmbedder:add(nn.Mean(3))
-imageEmbedder:add(nn.Mean(3))
-imageEmbedder:add(nn.Linear(config.NumFeatsCNN, opt.embeddingSize))
-imageEmbedder:add(nn.ReLU())
-imageEmbedder:add(nn.View(1, opt.embeddingSize):setNumInputDims(1))
+textEmbedder:add(nn.LookupTable(vocabSize, opt.embeddingSize)):add(nn.SplitTable(1,2))
 
-local embedder = nn.Sequential():add(nn.ParallelTable():add(imageEmbedder):add(textEmbedder)):add(nn.JoinTable(1,2))
+local imageEmbedder = nn.Sequential()
+imageEmbedder:add(cudnn.SpatialConvolution(config.NumFeatsCNN, opt.embeddingSize, 1, 1))
+imageEmbedder:add(nn.ReLU())
+imageEmbedder:add(nn.View(opt.embeddingSize ,-1):setNumInputDims(3))
+imageEmbedder:add(nn.Transpose({2,3}))
+
+local embedder = nn.Sequential():add(imageEmbedder):add(textEmbedder)
 local classifier = nn.Linear(opt.rnnSize, vocabSize)
 local loss = nn.TemporalCriterion(nn.CrossEntropyCriterion())
 
@@ -114,7 +114,8 @@ local removeAfter = config.FeatLayerCNN
 for i = #cnnModel, removeAfter ,-1 do
     cnnModel:remove(i)
 end
-local model = nn.Sequential():add(embedder):add(recurrent):add(nn.Dropout(opt.dropout)):add(nn.TemporalModule(classifier))
+
+local model = nn.Sequential():add(embedder):add(recurrent):add(classifier)
 
 
 local TensorType = 'torch.FloatTensor'
@@ -241,14 +242,14 @@ local function Forward(DB, train)
         TensorType = TensorType
     }
 
-
     local yt = MiniBatch.Labels
     local y = torch.Tensor()
     local images = MiniBatch.Data
     local NumSamples = 0
     local lossVal = 0
     local currLoss = 0
-    model:sequence()
+    local captionModel = nn.Sequential():add(recurrent):add(nn.JoinTable(1,2,'caption'):type(TensorType)):add(classifier):add(nn.View(opt.batchSize, opt.seqLength, vocabSize))
+    captionModel:sequence()
 
     BufferNext()
 
@@ -262,24 +263,48 @@ local function Forward(DB, train)
         while MiniBatch:getNextBatch() do
             model:zeroState()
             if #normalization>0 then MiniBatch:normalize(unpack(normalization)) end
-            local imageRep = cnnModel:forward(images)
-            local x = {imageRep, yt:narrow(2, 1, opt.seqLength - 1)}
-            if train then
-                if opt.nGPU > 1 then
-                    model:syncParameters()
-                end
-                y, currLoss = optimizer:optimize(x, yt)
-            else
-                y = model:forward(x)
-                currLoss = loss:forward(y,yt)
+            local imageRep = imageEmbedder:forward(cnnModel:forward(images))
+            local text = textEmbedder:forward(yt:narrow(2, 1, opt.seqLength - 1))
+            local input = {}
+            input[1] = {torch.CudaTensor(opt.batchSize, opt.embeddingSize):zero(), imageRep}
+            for i=2,opt.seqLength do
+                input[i] = {text[i-1], imageRep}
             end
-            lossVal = currLoss / opt.seqLength + lossVal
-            NumSamples = NumSamples + opt.batchSize
-            xlua.progress(NumSamples, SizeData)
-        end
+            t=torch.tic()
+            y = captionModel:forward(input)
+            --print(torch.tic()-t)
+            currLoss = loss:forward(y,yt)
+          --  print(currLoss)
+            if train then
 
-        collectgarbage()
+                local f_eval = function()
+                    local dE_dy = loss:backward(y,yt)
+                    local dE_dCap = captionModel:backward(input, dE_dy)
+                    local dE_dEmb = {}
+                    local dE_dimg = dE_dCap[1][2]
+                    for i=1, opt.seqLength - 1 do
+                        dE_dEmb[i] = dE_dCap[i+1][1]
+                        dE_dimg = dE_dimg + dE_dCap[i+1][2]
+                    end
+                    textEmbedder:backward(yt:narrow(2, 1, opt.seqLength - 1), dE_dEmb)
+                     imageEmbedder:backward(cnnModel.output, dE_dimg)
+                    --Gradient clipping (actually normalizing)
+                    local norm = Gradients:norm()
+                    if norm > 5 then
+                        local shrink = 5 / norm
+                        Gradients:mul(shrink)
+                    end
+                    return currLoss, Gradients
+                end
+
+                _G.optim[opt.optimization](f_eval, Weights, optimState)
+            end
+        lossVal = currLoss / opt.seqLength + lossVal
+        NumSamples = NumSamples + opt.batchSize
+        xlua.progress(NumSamples, SizeData)
     end
+  end
+
     xlua.progress(NumSamples, SizeData)
     return(lossVal/math.ceil(SizeData/opt.batchSize))
 end

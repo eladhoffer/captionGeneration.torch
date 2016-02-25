@@ -5,31 +5,31 @@ require 'image'
 require 'trepl'
 require 'recurrent'
 
-cmd = torch.CmdLine()
-cmd:addTime()
-cmd:text()
-cmd:text('Training recurrent networks to create captions from images')
-cmd:text()
-cmd:text('==>Options')
-
-cmd:text('===>Data Options')
-cmd:option('-shuffle',            false,                       'shuffle training samples')
-
-cmd:text('===>Model And Training Regime')
-cmd:option('-model',              'GRU',                       'Model file - must return a model bulider function')
-cmd:option('-seqLength',          10,                          'number of timesteps to unroll for')
-
-cmd:option('-load',               '',                          'load existing net weights')
-cmd:option('-save',               os.date():gsub(' ',''),      'save directory')
-cmd:option('-optState',           false,                       'Save optimization state every epoch')
-cmd:option('-checkpoint',         0,                           'Save a weight check point every n samples. 0 for off')
-
-
-cutorch.setDevice(opt.devid)
-
+--cmd = torch.CmdLine()
+--cmd:addTime()
+--cmd:text()
+--cmd:text('Training recurrent networks to create captions from images')
+--cmd:text()
+--cmd:text('==>Options')
+--
+--cmd:text('===>Data Options')
+--cmd:option('-shuffle',            false,                       'shuffle training samples')
+--
+--cmd:text('===>Model And Training Regime')
+--cmd:option('-model',              'GRU',                       'Model file - must return a model bulider function')
+--cmd:option('-seqLength',          10,                          'number of timesteps to unroll for')
+--
+--cmd:option('-load',               '',                          'load existing net weights')
+--cmd:option('-save',               os.date():gsub(' ',''),      'save directory')
+--cmd:option('-optState',           false,                       'Save optimization state every epoch')
+--cmd:option('-checkpoint',         0,                           'Save a weight check point every n samples. 0 for off')
+--
+--
+--cutorch.setDevice(opt.devid)
+--
 local config = require 'Config'
 config.InputSize = {3,224,224}
-config.SentenceLength = opt.seqLength
+config.SentenceLength = 10--opt.seqLength
 local numImages = 20
 local numWords = 15
 local data =require 'Data'
@@ -84,6 +84,7 @@ local embeddedImg = imageEmbedder:forward(imageRep):squeeze()
 model:zeroState()
 local pred = model:forward(embeddedImg)
 local _, wordNums = pred:max(2)
+--wordNums:fill(vocab['skiing'])
 for j=1, numWords do
   numVecs:select(2,j):copy(wordNums)
   embedded = textEmbedder:forward(wordNums):squeeze()
